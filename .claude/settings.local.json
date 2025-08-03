@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(move README.md README_OLD.md)",
+      "Bash(move README_NEW.md README.md)",
+      "Bash(copy README.md README_OLD.md)",
+      "Bash(copy README_NEW.md README.md)",
+      "Bash(taskkill:*)",
+      "Bash(powershell:*)"
+    ],
+    "deny": []
+  }
+}
