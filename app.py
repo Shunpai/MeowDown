@@ -71,7 +71,7 @@ def setup_page_config():
         page_title=f"{CAT_EMOJIS['normal']} {APP_NAME} - Purr-fectly Cute!",
         page_icon="🐱",
         layout="centered",
-        initial_sidebar_state="collapsed",
+        initial_sidebar_state="expanded",
         menu_items={
             'Get Help': GITHUB_URL,
             'Report a bug': f"{GITHUB_URL}/issues",
@@ -109,6 +109,37 @@ def load_custom_css():
         background: linear-gradient(135deg, #ffeef8 0%, #f0e6ff 25%, #e6f3ff 50%, #ffeef8 75%, #f8e6ff 100%);
         background-size: 400% 400%;
         animation: dreamyBackground 20s ease infinite;
+    }
+    
+    /* Cute bounce animation for buttons */
+    @keyframes bounce {
+        0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+        40% { transform: translateY(-10px); }
+        60% { transform: translateY(-5px); }
+    }
+    
+    @keyframes pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+        100% { transform: scale(1); }
+    }
+    
+    @keyframes wiggle {
+        0%, 100% { transform: rotate(0deg); }
+        25% { transform: rotate(2deg); }
+        75% { transform: rotate(-2deg); }
+    }
+    
+    /* Make buttons more bouncy */
+    .stButton > button {
+        transition: all 0.3s ease !important;
+        border-radius: 15px !important;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2) !important;
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3) !important;
     }
     
     /* Custom font for the whole app */
@@ -444,8 +475,11 @@ def install_ffmpeg():
 # 🎬 DOWNLOAD FUNCTIONS
 # =============================================================================
 
-def download_video(url, dest_folder, format_type, progress_container):
-    """Download video with real-time progress updates."""
+def download_video(url, dest_folder, format_type, progress_container, options=None):
+    """Download video with real-time progress updates and advanced options."""
+    if options is None:
+        options = {}
+    
     with progress_container.container():
         st.info(f"Starting download... {CAT_EMOJIS['excited']}")
         
@@ -462,66 +496,445 @@ def download_video(url, dest_folder, format_type, progress_container):
         bin_dir = get_app_dir()
         ffmpeg_path = bin_dir / ("ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg")
         
-        # Build command
-        cmd = [sys.executable, "-m", "yt_dlp", url, "--newline"]
+        # Build base command (URL will be added later for each batch)
+        cmd = [sys.executable, "-m", "yt_dlp", "--newline"]
         
         if ffmpeg_path.exists():
             cmd.extend(["--ffmpeg-location", str(ffmpeg_path)])
         
-        if format_type == "mp3":
-            cmd.extend(["-x", "--audio-format", "mp3", "--audio-quality", "0"])
-            output_template = str(dest_path / "🎵%(title)s.%(ext)s")
+        # Handle batch mode
+        urls_to_process = []
+        if options.get('batch_mode', False) and options.get('batch_urls', ''):
+            # Split batch URLs and clean them
+            batch_list = [u.strip() for u in options['batch_urls'].split('\n') if u.strip()]
+            urls_to_process.extend(batch_list)
+        if url.strip():  # Add the main URL if provided
+            urls_to_process.append(url.strip())
+        
+        if not urls_to_process:
+            st.error(f"No valid URLs provided! {CAT_EMOJIS['error']}")
+            return False
+        
+        # Handle channel mode
+        if options.get('channel_mode', False):
+            # For channel mode, we want all videos from the channel
+            cmd.append("--yes-playlist")
+            cmd.extend(["--playlist-end", str(options.get('channel_limit', 25))])
+        elif options.get('is_playlist', False):
+            cmd.append("--yes-playlist")
+            max_downloads = options.get('max_downloads', 50)
+            cmd.extend(["--playlist-end", str(max_downloads)])
         else:
+            cmd.append("--no-playlist")
+        
+        # Handle format and quality
+        if format_type == "mp3_complete":
+            # Complete MP3 with everything embedded
+            cmd.extend(["-x", "--audio-format", "mp3"])
+            
+            # Handle audio quality
+            audio_quality = options.get('audio_quality', '320 kbps (Best) - *audiophile cats*')
+            if "320 kbps" in audio_quality:
+                cmd.extend(["--audio-quality", "0"])
+            elif "256 kbps" in audio_quality:
+                cmd.extend(["--audio-quality", "2"])
+            elif "192 kbps" in audio_quality:
+                cmd.extend(["--audio-quality", "5"])
+            elif "128 kbps" in audio_quality:
+                cmd.extend(["--audio-quality", "7"])
+            elif "96 kbps" in audio_quality:
+                cmd.extend(["--audio-quality", "9"])
+            else:
+                cmd.extend(["--audio-quality", "0"])  # Default to 320kbps for complete version
+            
+            # Embed EVERYTHING into the MP3
+            cmd.extend([
+                "--add-metadata",           # Add metadata tags
+                "--embed-metadata",         # Embed metadata into file
+                "--embed-thumbnail",        # Embed thumbnail as album art
+                "--convert-thumbnails", "jpg"  # Convert to JPG for better compatibility
+            ])
+            
+            # Don't save separate thumbnail files - only embed them
+            # (removing --write-thumbnail to avoid clutter)
+            
+            if options.get('playlist_numbering', False):
+                output_template = str(dest_path / "%(playlist_index)03d - 🎵%(artist,uploader|Unknown Artist)s - %(title)s.%(ext)s")
+            else:
+                output_template = str(dest_path / "🎵%(artist,uploader|Unknown Artist)s - %(title)s.%(ext)s")
+        elif format_type == "best":
+            cmd.extend(["-f", "best"])
+            if options.get('playlist_numbering', False):
+                output_template = str(dest_path / "%(playlist_index)03d - 🎬%(title)s.%(ext)s")
+            else:
+                output_template = str(dest_path / "🎬%(title)s.%(ext)s")
+        elif format_type.startswith("video_"):
+            quality = format_type.split("_")[1]
+            if quality == "720p":
+                cmd.extend(["-f", "best[height<=720]/best"])
+            elif quality == "1080p":
+                cmd.extend(["-f", "best[height<=1080]/best"])
+            elif quality == "1440p":
+                cmd.extend(["-f", "best[height<=1440]/best"])
+            elif quality == "4K":
+                cmd.extend(["-f", "best[height<=2160]/best"])
+            elif quality == "best":
+                cmd.extend(["-f", "best"])
+            elif quality == "worst":
+                cmd.extend(["-f", "worst"])
+            
+            if options.get('playlist_numbering', False):
+                output_template = str(dest_path / "%(playlist_index)03d - 🎬%(title)s.%(ext)s")
+            else:
+                output_template = str(dest_path / "🎬%(title)s.%(ext)s")
+        else:  # Default MP4
             cmd.extend(["-f", "best[ext=mp4]/best"])
-            output_template = str(dest_path / "🎬%(title)s.%(ext)s")
+            if options.get('playlist_numbering', False):
+                output_template = str(dest_path / "%(playlist_index)03d - 🎬%(title)s.%(ext)s")
+            else:
+                output_template = str(dest_path / "🎬%(title)s.%(ext)s")
+        
+        # Handle auto-organization
+        organize_type = options.get('auto_organize', '🗂️ No organization - *all in one folder*')
+        if "By Date" in organize_type:
+            output_template = str(dest_path / "%(upload_date>%Y)s/%(upload_date>%m)s/%(upload_date>%d)s" / Path(output_template).name)
+        elif "By Channel" in organize_type:
+            output_template = str(dest_path / "%(uploader)s" / Path(output_template).name)
+        elif "By Type" in organize_type:
+            if format_type in ["mp3", "mp3_meta"]:
+                output_template = str(dest_path / "Audio" / Path(output_template).name)
+            else:
+                output_template = str(dest_path / "Video" / Path(output_template).name)
+        elif "By Playlist" in organize_type:
+            output_template = str(dest_path / "%(playlist_title)s" / Path(output_template).name)
         
         cmd.extend(["-o", output_template])
+        
+        # Add smart filters
+        filters = []
+        
+        # Duration filters
+        if options.get('duration_filter', False):
+            duration_min = options.get('duration_min', 0)
+            duration_max = options.get('duration_max', 0)
+            if duration_min > 0:
+                filters.append(f"duration>={duration_min}")
+            if duration_max > 0:
+                filters.append(f"duration<={duration_max}")
+        
+        # File size filters
+        if options.get('size_filter', False):
+            max_size = options.get('max_filesize', 'No limit')
+            if max_size != 'No limit':
+                size_bytes = {
+                    '50MB': '50M',
+                    '100MB': '100M', 
+                    '250MB': '250M',
+                    '500MB': '500M',
+                    '1GB': '1000M',
+                    '2GB': '2000M'
+                }.get(max_size, '500M')
+                filters.append(f"filesize<={size_bytes}")
+        
+        # Content type filters - disable live filter for now as it has syntax issues
+        # if options.get('skip_live', True):
+        #     # Live stream filtering needs to be handled differently
+        #     pass
+        
+        if options.get('skip_shorts', False):
+            filters.append("duration>=60")  # Skip videos shorter than 60 seconds
+        
+        # Language filters - temporarily disabled to avoid syntax issues
+        # lang_pref = options.get('language_pref', '🌐 Any language')
+        # if "English only" in lang_pref:
+        #     filters.append("language=en")
+        # elif "Spanish only" in lang_pref:
+        #     filters.append("language=es")
+        # elif "French only" in lang_pref:
+        #     filters.append("language=fr")
+        # elif "German only" in lang_pref:
+        #     filters.append("language=de")
+        # elif "Japanese only" in lang_pref:
+        #     filters.append("language=ja")
+        # elif "Korean only" in lang_pref:
+        #     filters.append("language=ko")
+        
+        # Apply filters if any
+        if filters:
+            filter_string = " & ".join(filters)
+            if format_type in ["mp3", "mp3_meta"]:
+                cmd.extend(["-f", f"bestaudio[{filter_string}]/bestaudio"])
+            else:
+                # For video, modify existing format selector
+                for i, arg in enumerate(cmd):
+                    if arg == "-f" and i + 1 < len(cmd):
+                        current_format = cmd[i + 1]
+                        cmd[i + 1] = f"{current_format}[{filter_string}]/{current_format}"
+                        break
+        
+        # Add download archive for history
+        if options.get('download_archive', True):
+            archive_file = dest_path / ".meowdown_history.txt"
+            cmd.extend(["--download-archive", str(archive_file)])
+        
+        # Add retry options
+        if options.get('auto_retry', True):
+            cmd.extend(["--retries", "3", "--fragment-retries", "3"])
+        
+        # Add metadata options
+        if options.get('download_metadata', True):
+            cmd.append("--write-info-json")
+        
+        # Add thumbnail options  
+        if options.get('download_thumbnail', True):
+            cmd.append("--write-thumbnail")
+            
+        # Add subtitles options
+        if options.get('download_subtitles', False):
+            cmd.extend(["--write-subs", "--write-auto-subs", "--sub-langs", "en,en-US"])
+            
+        # Add metadata embedding for audio/video files
+        if options.get('embed_metadata', True):
+            cmd.append("--add-metadata")
+            if format_type in ["mp3", "mp3_meta"]:
+                cmd.append("--embed-metadata")
         
         try:
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
-                                  stderr=subprocess.STDOUT, text=True)
+            # Show what we're about to do
+            if len(urls_to_process) > 1:
+                st.info(f"🎯 Batch mode: Processing {len(urls_to_process)} URLs!")
+            elif options.get('channel_mode', False):
+                st.info(f"📺 Channel mode: Downloading up to {options.get('channel_limit', 25)} videos!")
+            elif options.get('is_playlist', False):
+                st.info(f"📀 Playlist mode: Downloading up to {options.get('max_downloads', 50)} tracks!")
+            else:
+                st.info(f"🎵 Single download mode activated!")
             
-            for line in proc.stdout:
-                if "[download]" in line:
-                    if "Destination:" in line:
-                        status_text.success(f"Found video! {CAT_EMOJIS['excited']}")
-                    elif "has already been downloaded" in line:
-                        status_text.info(f"Already downloaded! {CAT_EMOJIS['sleepy']}")
-                        progress_bar.progress(1.0)
-                    else:
-                        match = re.search(r'(\d{1,3}(?:\.\d+)?)%', line)
-                        if match:
-                            percent = float(match.group(1)) / 100.0
-                            progress_bar.progress(percent)
-                            
-                            # Cute progress messages
-                            if percent < 0.25:
-                                status_text.info(f"Getting started... {percent*100:.1f}% {CAT_EMOJIS['working']}")
-                            elif percent < 0.5:
-                                status_text.info(f"Making progress... {percent*100:.1f}% {CAT_EMOJIS['happy']}")
-                            elif percent < 0.75:
-                                status_text.info(f"Almost there... {percent*100:.1f}% {CAT_EMOJIS['excited']}")
-                            else:
-                                status_text.info(f"So close... {percent*100:.1f}% {CAT_EMOJIS['heart_eyes']}")
-                elif "[ffmpeg]" in line:
-                    status_text.info(f"Converting... {CAT_EMOJIS['music']}")
+            # Process each URL (for batch mode or single URL)
+            overall_success = True
+            for i, current_url in enumerate(urls_to_process):
+                if len(urls_to_process) > 1:
+                    st.info(f"🐱 Processing URL {i+1}/{len(urls_to_process)}: {current_url[:50]}...")
+                    
+                # Build command for this specific URL
+                current_cmd = cmd + [current_url]
+                
+                proc = subprocess.Popen(current_cmd, stdout=subprocess.PIPE, 
+                                      stderr=subprocess.STDOUT, text=True)
+                
+                # Capture all output for debugging
+                all_output = []
+                
+                # Process output for this URL
+                for line in proc.stdout:
+                    all_output.append(line.strip())
+                    
+                    if "[download]" in line:
+                        if "Destination:" in line:
+                            status_text.success(f"Found content! {CAT_EMOJIS['excited']}")
+                        elif "has already been downloaded" in line:
+                            status_text.info(f"Already downloaded! {CAT_EMOJIS['sleepy']}")
+                            progress_bar.progress(1.0)
+                        elif "Downloading playlist:" in line:
+                            status_text.info(f"Found playlist! {CAT_EMOJIS['heart_eyes']}")
+                        else:
+                            match = re.search(r'(\d{1,3}(?:\.\d+)?)%', line)
+                            if match:
+                                percent = float(match.group(1)) / 100.0
+                                progress_bar.progress(percent)
+                                
+                                # Cute progress messages
+                                if percent < 0.25:
+                                    status_text.info(f"Getting started... {percent*100:.1f}% {CAT_EMOJIS['working']}")
+                                elif percent < 0.5:
+                                    status_text.info(f"Making progress... {percent*100:.1f}% {CAT_EMOJIS['happy']}")
+                                elif percent < 0.75:
+                                    status_text.info(f"Almost there... {percent*100:.1f}% {CAT_EMOJIS['excited']}")
+                                else:
+                                    status_text.info(f"So close... {percent*100:.1f}% {CAT_EMOJIS['heart_eyes']}")
+                    elif "[ffmpeg]" in line:
+                        status_text.info(f"Converting... {CAT_EMOJIS['music']}")
+                    elif "[Metadata]" in line:
+                        status_text.info(f"Adding metadata... {CAT_EMOJIS['thinking']}")
+                    elif "ERROR:" in line:
+                        st.error(f"🚨 yt-dlp error: {line}")
+                    elif "WARNING:" in line:
+                        st.warning(f"⚠️ yt-dlp warning: {line}")
+                
+                proc.wait()
+                
+                # Check success for this URL
+                if proc.returncode != 0:
+                    overall_success = False
+                    st.error(f"❌ Failed to download: {current_url[:50]}... (Exit code: {proc.returncode}) {CAT_EMOJIS['error']}")
+                    
+                    # Show last few lines of output for debugging
+                    if all_output:
+                        st.error("📋 Last few lines of yt-dlp output:")
+                        for line in all_output[-5:]:  # Show last 5 lines
+                            if line.strip():
+                                st.code(line)
+                    
+                    # Try to run a simple test command to see what's wrong
+                    st.info("🔧 Testing basic yt-dlp functionality...")
+                    test_cmd = [sys.executable, "-m", "yt_dlp", "--version"]
+                    try:
+                        test_result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=10)
+                        if test_result.returncode == 0:
+                            st.info(f"✅ yt-dlp version: {test_result.stdout.strip()}")
+                        else:
+                            st.error(f"❌ yt-dlp test failed: {test_result.stderr}")
+                    except Exception as e:
+                        st.error(f"❌ yt-dlp test error: {e}")
+                        
+                elif len(urls_to_process) > 1:
+                    st.success(f"✅ Completed URL {i+1}/{len(urls_to_process)}")
             
-            proc.wait()
-            
-            if proc.returncode == 0:
-                status_text.success(f"Download complete! {CAT_EMOJIS['success']}")
+            # Final status
+            if overall_success:
+                status_text.success(f"All downloads complete! {CAT_EMOJIS['success']}")
                 progress_bar.progress(1.0)
+                
+                # Handle MP3 playlist merging if needed
+                if format_type == "mp3_complete" and options.get('is_playlist', False) and options.get('merge_playlist', False):
+                    st.info(f"🎵 Creating playlist mix... {CAT_EMOJIS['music']}")
+                    mix_success = create_playlist_mix(dest_path, format_type, options)
+                    if mix_success:
+                        st.success(f"🎵 Playlist mix created! {CAT_EMOJIS['success']}")
+                    else:
+                        st.warning(f"⚠️ Mix creation had issues, but individual files are ready! {CAT_EMOJIS['thinking']}")
+                
+                # Show post-processing message if enabled
+                post_process = options.get('post_process', '🐱 Do nothing - *just enjoy*')
+                if "Normalize audio" in post_process:
+                    st.info(f"🔊 Normalizing audio volumes... {CAT_EMOJIS['music']}")
+                elif "Auto-trim" in post_process:
+                    st.info(f"✂️ Trimming silence... {CAT_EMOJIS['working']}")
+                elif "Compress" in post_process:
+                    st.info(f"🗜️ Compressing files... {CAT_EMOJIS['thinking']}")
+                elif "Copy to cloud" in post_process:
+                    st.info(f"📤 Copying to cloud folder... {CAT_EMOJIS['heart_eyes']}")
+                
                 return True
             else:
-                status_text.error(f"Download failed! {CAT_EMOJIS['error']}")
+                status_text.error(f"Some downloads failed! {CAT_EMOJIS['error']}")
                 return False
                 
         except Exception as e:
             st.error(f"Download error: {e} {CAT_EMOJIS['error']}")
             return False
+
+def create_playlist_mix(dest_path, format_type, options):
+    """Create a single MP3 mix from all downloaded files."""
+    try:
+        dest_path = Path(dest_path)
+        
+        # Get FFmpeg path
+        bin_dir = get_app_dir()
+        ffmpeg_path = bin_dir / ("ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg")
+        
+        if not ffmpeg_path.exists():
+            st.error(f"FFmpeg not found for mixing! {CAT_EMOJIS['error']}")
+            return False
+        
+        # Find all MP3 files to merge (sorted by number)
+        if format_type == "mp3_complete":
+            audio_files = sorted(dest_path.glob("*.mp3"))
+        else:
+            audio_files = sorted(dest_path.glob("*.mp4"))
+        
+        if len(audio_files) < 2:
+            st.info(f"Only {len(audio_files)} file found, no mixing needed! {CAT_EMOJIS['sleepy']}")
+            return True
+        
+        st.info(f"🎵 Found {len(audio_files)} tracks to mix!")
+        
+        # Create a temporary file list for FFmpeg
+        temp_file_list = dest_path / "temp_filelist.txt"
+        
+        # Generate mix filename
+        first_file = audio_files[0]
+        if "🎬" in first_file.name:
+            # Extract playlist name from first file
+            base_name = first_file.name.split(" - ", 1)[-1].split(".")[0]
+            mix_name = f"🎵 PLAYLIST MIX - {base_name}.mp3"
+        else:
+            mix_name = f"🎵 PLAYLIST MIX - {len(audio_files)} tracks.mp3"
+        
+        mix_path = dest_path / mix_name
+        
+        # Create file list for FFmpeg concat
+        with open(temp_file_list, 'w', encoding='utf-8') as f:
+            for audio_file in audio_files:
+                # Escape single quotes for FFmpeg
+                file_path = str(audio_file).replace("'", "'\\''")
+                f.write(f"file '{file_path}'\n")
+        
+        # Build FFmpeg command for concatenation
+        cmd = [
+            str(ffmpeg_path),
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(temp_file_list),
+            "-c", "copy",  # Copy without re-encoding when possible
+            str(mix_path),
+            "-y"  # Overwrite if exists
+        ]
+        
+        # For MP3 complete files, use direct copy for better quality
+        if format_type == "mp3_complete" and all(f.suffix == '.mp3' for f in audio_files):
+            # Direct MP3 concatenation - preserves embedded metadata and thumbnails
+            cmd = [
+                str(ffmpeg_path),
+                "-f", "concat",
+                "-safe", "0",
+                "-i", str(temp_file_list),
+                "-c", "copy",  # Copy without re-encoding
+                "-map_metadata", "0",  # Copy metadata from first file
+                str(mix_path),
+                "-y"
+            ]
+        else:
+            # For other formats, convert to MP3
+            cmd = [
+                str(ffmpeg_path),
+                "-f", "concat",
+                "-safe", "0", 
+                "-i", str(temp_file_list),
+                "-vn",  # No video
+                "-acodec", "libmp3lame",  # MP3 encoding
+                "-ab", "320k",  # High quality bitrate
+                str(mix_path),
+                "-y"
+            ]
+        
+        st.info(f"🔧 Running FFmpeg to create mix...")
+        
+        # Run FFmpeg
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # Clean up temp file
+        if temp_file_list.exists():
+            temp_file_list.unlink()
+        
+        if result.returncode == 0 and mix_path.exists():
+            st.success(f"✅ Created: {mix_name}")
+            
+            # Show file size
+            file_size = mix_path.stat().st_size / (1024 * 1024)  # MB
+            st.info(f"📁 Mix file size: {file_size:.1f} MB")
+            
+            return True
+        else:
+            st.error(f"❌ FFmpeg failed: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        st.error(f"Mix creation error: {e} {CAT_EMOJIS['error']}")
+        return False
 
 # =============================================================================
 # 🎨 UI COMPONENTS
@@ -618,32 +1031,386 @@ def show_stats():
 def show_download_interface():
     """Main download interface."""
     
-    # URL Input
-    st.markdown(f"### {CAT_EMOJIS['normal']} Paste your video URL")
+    # Cute main header
+    st.markdown(f"""
+    <div style="text-align: center; padding: 1.5rem; background: linear-gradient(135deg, #ffeef8 0%, #f0e6ff 50%, #e6f3ff 100%); border-radius: 20px; margin-bottom: 2rem; box-shadow: 0 8px 25px rgba(102, 126, 234, 0.15);">
+        <h1 style="margin: 0; color: #667eea; font-family: 'Comic Sans MS', cursive; font-size: 2.5rem;">{CAT_EMOJIS['heart_eyes']} MeowDown {CAT_EMOJIS['heart_eyes']}</h1>
+        <p style="margin: 0.5rem 0 0 0; color: #8b7ba8; font-size: 1.2rem; font-style: italic;">The purr-fectly cute video downloader!</p>
+        <div style="font-size: 1.5rem; margin-top: 0.8rem; animation: bounce 2s infinite;">🐱💕✨</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # URL Input with cute styling
+    st.markdown(f"""
+    <div style="margin-bottom: 1rem;">
+        <h3 style="color: #667eea; margin-bottom: 0.5rem; font-family: 'Comic Sans MS', cursive;">
+            {CAT_EMOJIS['excited']} Drop your video link here, human! {CAT_EMOJIS['paw']}
+        </h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
     url = st.text_input(
         "Video URL",
-        placeholder="https://youtube.com/watch?v=... or any supported site!",
-        help="Paste a video URL from YouTube, TikTok, or 1000+ other sites!",
+        placeholder="🌐 https://youtube.com/watch?v=... (or TikTok, Instagram, etc!) 🎬",
+        help="🐱 Paste any video URL from YouTube, TikTok, Instagram, or 1000+ other sites! The cats will fetch it for you! 🐾",
         label_visibility="collapsed"
     )
     
-    # Format and folder selection
-    col1, col2 = st.columns(2)
+    # Advanced options in expandable section with better styling
+    with st.expander(f"🎯 Advanced Download Options", expanded=False):
+        # Add cute cat animations floating around
+        st.markdown("""
+        <style>
+        .floating-cats-1 {
+            position: fixed;
+            top: 15%;
+            right: 30px;
+            font-size: 2.5rem;
+            animation: float1 3s ease-in-out infinite;
+            z-index: 1000;
+            pointer-events: none;
+            opacity: 0.8;
+        }
+        .floating-cats-2 {
+            position: fixed;
+            top: 25%;
+            left: 30px;
+            font-size: 2rem;
+            animation: float2 4s ease-in-out infinite;
+            z-index: 1000;
+            pointer-events: none;
+            opacity: 0.7;
+        }
+        .floating-cats-3 {
+            position: fixed;
+            top: 45%;
+            right: 10px;
+            font-size: 1.8rem;
+            animation: float3 5s ease-in-out infinite;
+            z-index: 1000;
+            pointer-events: none;
+            opacity: 0.6;
+        }
+        .floating-cats-4 {
+            position: fixed;
+            top: 60%;
+            left: 15px;
+            font-size: 2.2rem;
+            animation: float4 3.5s ease-in-out infinite;
+            z-index: 1000;
+            pointer-events: none;
+            opacity: 0.8;
+        }
+        @keyframes float1 {
+            0%, 100% { transform: translateY(0px) rotate(5deg); }
+            50% { transform: translateY(-25px) rotate(-8deg); }
+        }
+        @keyframes float2 {
+            0%, 100% { transform: translateY(0px) rotate(-3deg); }
+            50% { transform: translateY(-15px) rotate(6deg); }
+        }
+        @keyframes float3 {
+            0%, 100% { transform: translateY(0px) rotate(2deg); }
+            50% { transform: translateY(-20px) rotate(-4deg); }
+        }
+        @keyframes float4 {
+            0%, 100% { transform: translateY(0px) rotate(-6deg); }
+            50% { transform: translateY(-18px) rotate(3deg); }
+        }
+        .advanced-container {
+            padding: 2rem;
+            background: linear-gradient(135deg, rgba(255,240,250,0.4), rgba(240,220,255,0.4));
+            border-radius: 20px;
+            margin: 1.5rem 0;
+            border: 2px solid rgba(255,192,203,0.3);
+            box-shadow: 0 4px 15px rgba(255,192,203,0.2);
+        }
+        </style>
+        <div class="floating-cats-1">🐱</div>
+        <div class="floating-cats-2">😸</div>
+        <div class="floating-cats-3">😻</div>
+        <div class="floating-cats-4">🐾</div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown('<div class="advanced-container">', unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            format_choice = st.selectbox(
+                f"{CAT_EMOJIS['thinking']} Choose format",
+                [
+                    f"{CAT_EMOJIS['video']} MP4 (Video) - *purr-fect quality*", 
+                    f"{CAT_EMOJIS['music']} MP3 (Complete) - *with thumbnails & metadata embedded*",
+                    f"📱 Best Quality Available",
+                    f"🎬 Specific Quality..."
+                ],
+                help="Choose your preferred download format"
+            )
+            
+            # Quality options for specific quality choice
+            if "Specific Quality" in format_choice:
+                quality_choice = st.selectbox(
+                    "Video Quality",
+                    ["720p", "1080p", "1440p", "4K", "Best", "Worst"],
+                    index=2
+                )
+            else:
+                quality_choice = "best"
+        
+        with col2:
+            # Playlist options
+            is_playlist = st.checkbox(
+                f"📀 Download entire playlist/album",
+                help="Download all videos/songs from a playlist or album"
+            )
+            
+            if is_playlist:
+                playlist_numbering = st.checkbox(
+                    "🔢 Add track numbers",
+                    value=True,
+                    help="Add track numbers to filenames (001_, 002_, etc.)"
+                )
+                max_downloads = st.number_input(
+                    "Max items to download",
+                    min_value=1,
+                    max_value=500,
+                    value=50,
+                    help="Limit the number of items to download"
+                )
+                
+                # Playlist merging option (only for MP3 Complete format)
+                st.markdown("**🎵 Playlist Options:**")
+                if "MP3 (Complete)" in format_choice:
+                    merge_playlist = st.checkbox(
+                        f"🎵 **Create continuous playlist mix**",
+                        value=False,  # Default to False so individual tracks are cleaner
+                        help="🎧 Combine all tracks into one long MP3 file (like a radio show or DJ mix)"
+                    )
+                    st.info("ℹ️ **Individual tracks will always be downloaded.** Mix is optional!")
+                else:
+                    merge_playlist = False
+                    st.info("🎵 Mix option available for MP3 Complete format only")
+            else:
+                playlist_numbering = False
+                max_downloads = 1
+                merge_playlist = False
+        
+        # Additional Options
+        st.markdown("#### 📋 **Additional Options**")
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            download_subtitles = st.checkbox(
+                f"📝 Download subtitles",
+                help="Download subtitle files if available (video formats only)"
+            )
+        
+        with col4:
+            st.info("🎵 **MP3 Complete includes:** Metadata, thumbnails, and album art automatically embedded!")
+        
+        # Set defaults for MP3 Complete format
+        if "MP3 (Complete)" in format_choice:
+            download_metadata = False  # Don't save separate .json files
+            download_thumbnail = False  # Don't save separate .jpg files
+            embed_metadata = True      # Everything embedded in MP3
+        else:
+            download_metadata = st.checkbox(
+                f"📋 Download metadata files",
+                value=True,
+                help="Save .info.json files with video information"
+            )
+            download_thumbnail = st.checkbox(
+                f"🖼️ Save thumbnail files", 
+                value=True,
+                help="Save thumbnail images as separate files"
+            )
+            embed_metadata = False
+        
+        st.markdown("---")
+        st.markdown(f"### ✨ **Super Purr-fect Features** ✨")
+        
+        # Batch Downloads
+        col5, col6 = st.columns(2)
+        
+        with col5:
+            batch_mode = st.checkbox(
+                f"📋 Batch Download Mode",
+                help="Download multiple URLs at once - paste one URL per line!"
+            )
+            
+            if batch_mode:
+                batch_urls = st.text_area(
+                    "Multiple URLs (one per line)",
+                    placeholder="https://youtube.com/watch?v=abc123\nhttps://youtube.com/watch?v=def456\nhttps://soundcloud.com/track/xyz789",
+                    height=100,
+                    help="Paste multiple URLs, one per line"
+                )
+            else:
+                batch_urls = ""
+            
+            # Channel Downloads
+            channel_mode = st.checkbox(
+                f"📺 Channel/Creator Mode",
+                help="Download ALL videos from a channel or creator"
+            )
+            
+            if channel_mode:
+                channel_limit = st.number_input(
+                    "Max videos from channel",
+                    min_value=1,
+                    max_value=1000,
+                    value=25,
+                    help="Limit how many videos to download from the channel"
+                )
+            else:
+                channel_limit = 25
+        
+        with col6:
+            # Audio Quality for MP3s
+            if "MP3 (Complete)" in format_choice:
+                audio_quality = st.selectbox(
+                    f"🎵 Audio Quality",
+                    [
+                        "320 kbps (Best) - *audiophile cats*",
+                        "256 kbps (High) - *music loving cats*", 
+                        "192 kbps (Good) - *happy cats*",
+                        "128 kbps (Standard) - *casual cats*",
+                        "96 kbps (Small) - *space-saving cats*"
+                    ],
+                    index=0,  # Default to 320kbps for complete version
+                    help="Choose MP3 audio quality"
+                )
+            else:
+                audio_quality = "320 kbps (Best) - *audiophile cats*"
+            
+            # File Organization
+            auto_organize = st.selectbox(
+                f"📁 Auto-Organize Files",
+                [
+                    "🗂️ No organization - *all in one folder*",
+                    "📅 By Date - *YYYY/MM/DD folders*",
+                    "👤 By Channel - *separate channel folders*", 
+                    "🎬 By Type - *Video/Audio folders*",
+                    "🏷️ By Playlist - *playlist name folders*"
+                ],
+                help="Automatically organize downloads into folders"
+            )
+        
+        # Smart Filters
+        st.markdown("#### 🎯 **Smart Filters** *(Skip unwanted content)*")
+        col7, col8 = st.columns(2)
+        
+        with col7:
+            # Duration filter
+            duration_filter = st.checkbox(f"⏱️ Filter by duration")
+            if duration_filter:
+                duration_min = st.number_input("Min duration (seconds)", min_value=0, value=30, help="Skip videos shorter than this")
+                duration_max = st.number_input("Max duration (seconds)", min_value=0, value=3600, help="Skip videos longer than this (0 = no limit)")
+            else:
+                duration_min = 0
+                duration_max = 0
+            
+            # File size filter  
+            size_filter = st.checkbox(f"💾 Filter by file size")
+            if size_filter:
+                max_filesize = st.selectbox(
+                    "Max file size",
+                    ["50MB", "100MB", "250MB", "500MB", "1GB", "2GB", "No limit"],
+                    index=3,
+                    help="Skip files larger than this"
+                )
+            else:
+                max_filesize = "No limit"
+        
+        with col8:
+            # Content filters
+            skip_live = st.checkbox(
+                f"🚫 Skip live streams",
+                value=True,
+                help="Don't download live streams or premieres"
+            )
+            
+            skip_shorts = st.checkbox(
+                f"🚫 Skip shorts/clips",
+                help="Skip YouTube Shorts, TikToks under 60s, etc."
+            )
+            
+            # Language preference
+            language_pref = st.selectbox(
+                f"🌍 Language Preference",
+                [
+                    "🌐 Any language",
+                    "🇺🇸 English only",
+                    "🇪🇸 Spanish only", 
+                    "🇫🇷 French only",
+                    "🇩🇪 German only",
+                    "🇯🇵 Japanese only",
+                    "🇰🇷 Korean only"
+                ],
+                help="Prefer content in specific language"
+            )
+        
+        # Power User Features
+        st.markdown("#### ⚡ **Power User Features**")
+        col9, col10 = st.columns(2)
+        
+        with col9:
+            auto_retry = st.checkbox(
+                f"🔄 Auto-retry failed downloads",
+                value=True,
+                help="Automatically retry downloads that fail"
+            )
+            
+            download_archive = st.checkbox(
+                f"📚 Keep download history",
+                value=True,
+                help="Remember what you've downloaded to avoid duplicates"
+            )
+        
+        with col10:
+            post_process = st.selectbox(
+                f"🛠️ After download...",
+                [
+                    "🐱 Do nothing - *just enjoy*",
+                    "🔊 Normalize audio volume",
+                    "✂️ Auto-trim silence", 
+                    "🗜️ Compress to save space",
+                    "📤 Copy to cloud folder"
+                ],
+                help="Automatically process files after download"
+            )
+            
+            notification_mode = st.selectbox(
+                f"🔔 Notifications",
+                [
+                    "🐱 Cat celebrations only",
+                    "🔔 System notifications",
+                    "📧 Email when done",
+                    "🤫 Silent mode"
+                ],
+                help="How to notify you when downloads complete"
+            )
+        
+        st.markdown('</div>', unsafe_allow_html=True)  # Close advanced container
     
-    with col1:
-        format_choice = st.selectbox(
-            f"{CAT_EMOJIS['thinking']} Choose format",
-            [f"{CAT_EMOJIS['video']} MP4 (Video) - *purr-fect quality*", f"{CAT_EMOJIS['music']} MP3 (Audio) - *meow-sical*"],
-            help="MP4 for videos, MP3 for audio only - both are pawsome!"
-        )
-        format_type = "mp3" if "MP3" in format_choice else "mp4"
+    # Folder selection (always visible) with better spacing
+    st.markdown("---")
+    st.markdown("### 📁 **Download Location**")
+    download_folder = st.text_input(
+        f"{CAT_EMOJIS['paw']} Download folder",
+        value=get_default_download_folder(),
+        help="Where to save your downloads"
+    )
     
-    with col2:
-        download_folder = st.text_input(
-            f"{CAT_EMOJIS['paw']} Download folder",
-            value=get_default_download_folder(),
-            help="Where to save your downloads"
-        )
+    # Determine format type
+    if "MP3 (Complete)" in format_choice:
+        format_type = "mp3_complete"
+    elif "Best Quality" in format_choice:
+        format_type = "best"
+    elif "Specific Quality" in format_choice:
+        format_type = f"video_{quality_choice}"
+    else:
+        format_type = "mp4"
     
     # Download button with extra cuteness
     st.markdown("<div style='text-align: center; margin: 1rem 0;'><small style='color: #ff9a9e;'>Ready to pounce on that video? 🐾</small></div>", unsafe_allow_html=True)
@@ -651,7 +1418,7 @@ def show_download_interface():
     # Create columns to center the button better
     col1, col2, col3 = st.columns([1, 3, 1])
     with col2:
-        if st.button(f"{CAT_EMOJIS['download']} Download Meow! 💕", type="primary", use_container_width=True):
+        if st.button(f"🚀✨ **DOWNLOAD MEOW!** ✨🐾", type="primary", use_container_width=True, help="Click to let the cats fetch your video! 🐱💕"):
             if not url:
                 st.warning(f"Please paste a URL first! {CAT_EMOJIS['thinking']}")
                 return
@@ -668,9 +1435,40 @@ def show_download_interface():
                         return
                     st.session_state.deps_checked = True
             
+            # Prepare advanced options
+            download_options = {
+                'is_playlist': is_playlist,
+                'playlist_numbering': playlist_numbering,
+                'max_downloads': max_downloads,
+                'merge_playlist': merge_playlist,
+                'download_metadata': download_metadata,
+                'download_thumbnail': download_thumbnail,
+                'download_subtitles': download_subtitles,
+                'embed_metadata': embed_metadata,
+                # New creative features
+                'batch_mode': batch_mode,
+                'batch_urls': batch_urls,
+                'channel_mode': channel_mode,
+                'channel_limit': channel_limit,
+                'audio_quality': audio_quality,
+                'auto_organize': auto_organize,
+                'duration_filter': duration_filter,
+                'duration_min': duration_min,
+                'duration_max': duration_max,
+                'size_filter': size_filter,
+                'max_filesize': max_filesize,
+                'skip_live': skip_live,
+                'skip_shorts': skip_shorts,
+                'language_pref': language_pref,
+                'auto_retry': auto_retry,
+                'download_archive': download_archive,
+                'post_process': post_process,
+                'notification_mode': notification_mode
+            }
+            
             # Download
             progress_container = st.empty()
-            success = download_video(url, download_folder, format_type, progress_container)
+            success = download_video(url, download_folder, format_type, progress_container, download_options)
             
             if success:
                 # Show success message first
@@ -688,156 +1486,159 @@ def show_download_interface():
                 # Force a small delay to ensure animations load
                 time.sleep(0.1)
                 
-                # Create columns for better button layout
-                col1, col2, col3 = st.columns([1, 2, 1])
+                # PERSISTENT DOWNLOAD FOLDER OPENER - ALWAYS VISIBLE
+                st.markdown("---")
+                st.markdown("### 📁 **Open Your Downloaded Files**")
+                st.info(f"📍 **Download location:** `{download_folder}`")
                 
-                with col2:
-                    # Open folder button with working method from debug version
-                    if st.button(f"{CAT_EMOJIS['paw']} Open Downloads Folder", type="secondary", use_container_width=True, key="open_folder_success"):
-                        success = False
-                        
-                        try:
-                            # Make sure folder exists
-                            folder = Path(download_folder)
-                            if not folder.exists():
-                                st.info("Created downloads folder!")
-                                folder.mkdir(parents=True, exist_ok=True)
-                            
-                            if platform.system() == "Windows":
-                                # Use the method that worked in our test: cmd /c start
-                                try:
-                                    result = subprocess.run(
-                                        ["cmd", "/c", "start", str(folder)], 
-                                        check=True, 
-                                        capture_output=True, 
-                                        timeout=5
-                                    )
-                                    st.success("Opening your downloads folder! 😸")
-                                    success = True
-                                    
-                                except subprocess.CalledProcessError as e:
-                                    pass
-                                        
-                                except subprocess.TimeoutExpired:
-                                    st.success("Opening folder (command timed out but likely worked)")
-                                    success = True
-                                    
-                                except Exception as e:
-                                    pass
-                                
-                                # Backup method: os.startfile
-                                if not success:
-                                    try:
-                                        os.startfile(str(folder))
-                                        st.success("Opening your downloads folder! 😸")
-                                        success = True
-                                    except Exception as e:
-                                        pass
-                            
-                            else:
-                                # Non-Windows platforms
-                                if platform.system() == "Darwin":
-                                    result = subprocess.run(["open", str(folder)], check=True, capture_output=True)
-                                    success = True
-                                else:
-                                    result = subprocess.run(["xdg-open", str(folder)], check=True, capture_output=True)
-                                    success = True
-                                st.success("Opening your downloads folder! 😸")
-                            
-                            if not success:
-                                st.error("Couldn't open folder automatically 😿")
-                            
-                        except Exception as e:
-                            st.error(f"Error: {e}")
-                        
-                        # Always show manual path
-                        st.info(f"**Manual path:** `{download_folder}`")
-                        st.markdown("*Copy this path to your file explorer if the button didn't work*")
+                # Store download folder in session state to persist across reruns
+                st.session_state.last_download_folder = download_folder
+                
+                # Cute instructions instead of debug clutter
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #ffeef8 0%, #f0e6ff 100%); padding: 1.5rem; border-radius: 15px; margin: 1rem 0; text-align: center; border: 2px solid rgba(102, 126, 234, 0.2);">
+                    <h3 style="color: #667eea; margin-bottom: 1rem;">{CAT_EMOJIS['paw']} Where are my files?</h3>
+                    <div style="background: rgba(255,255,255,0.8); padding: 1rem; border-radius: 10px; margin: 0.5rem 0;">
+                        <div style="color: #8b7ba8; font-size: 0.9rem; margin-bottom: 0.3rem;">📍 Your downloads are purr-fectly stored in:</div>
+                        <div style="color: #667eea; font-weight: bold; word-break: break-all; font-family: monospace; font-size: 0.9rem;">{download_folder}</div>
+                    </div>
+                    <div style="color: #8b7ba8; font-size: 0.95rem; margin-top: 1rem;">
+                        💡 <strong>Tip:</strong> Look for the <strong>"🚀✨ Open My Downloads! ✨🐾"</strong> button in the sidebar! {CAT_EMOJIS['heart_eyes']}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Backup manual copy option
+                with st.expander("📋 Need to copy the path manually?", expanded=False):
+                    st.code(download_folder)
+                    st.markdown("💡 *Copy this path and paste it in File Explorer's address bar!*")
 
 def show_sidebar():
-    """Show sidebar with additional options."""
+    """Show cute sidebar with cat-themed elements."""
     with st.sidebar:
-        st.markdown(f"## {CAT_EMOJIS['normal']} MeowDown")
-        st.markdown(f"Version {VERSION}")
+        # Cute header with animated elements
+        st.markdown(f"""
+        <div style="text-align: center; padding: 1rem; background: linear-gradient(135deg, #ffeef8 0%, #f0e6ff 100%); border-radius: 15px; margin-bottom: 1rem; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2);">
+            <h2 style="margin: 0; color: #667eea; font-family: 'Comic Sans MS', cursive;">{CAT_EMOJIS['heart_eyes']} MeowDown</h2>
+            <p style="margin: 0; color: #8b7ba8; font-size: 0.9rem;">v{VERSION} - Purr-fectly Cute!</p>
+            <div style="font-size: 2.5rem; margin: 0.5rem 0; animation: bounce 2s infinite;">🐱</div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Test button for animations
+        # FOLDER OPENER SECTION - Clean and prominent
+        if 'last_download_folder' in st.session_state:
+            folder_path = st.session_state.last_download_folder
+            folder_name = Path(folder_path).name if Path(folder_path).name else "Downloads"
+            
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(255,238,248,0.8) 100%); padding: 1rem; border-radius: 12px; margin: 1rem 0; border: 2px solid #f0e6ff;">
+                <h3 style="margin: 0 0 0.5rem 0; color: #667eea; font-size: 1.1rem;">📁 Your Downloads</h3>
+                <div style="font-size: 0.85rem; color: #8b7ba8; margin-bottom: 0.3rem;">📍 Latest downloads in:</div>
+                <div style="background: rgba(102, 126, 234, 0.1); padding: 0.5rem; border-radius: 8px; font-weight: bold; color: #667eea; font-size: 0.9rem; word-break: break-all;">📂 {folder_name}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Primary folder opener button - bigger and cuter
+            if st.button("🚀✨ **Open My Downloads!** ✨🐾", use_container_width=True, key="sidebar_folder_opener", type="primary"):
+                print(f"\nSIDEBAR FOLDER BUTTON CLICKED!")
+                print(f"   Folder: {folder_path}")
+                # Track download count for cat mood
+                st.session_state.download_count = st.session_state.get('download_count', 0) + 1
+                
+                try:
+                    subprocess.Popen(['explorer', folder_path])
+                    print(f"   Explorer command sent!")
+                    st.success("🎉 Folder opened! Happy downloading! 🐱✨")
+                    st.balloons()
+                except Exception as e:
+                    try:
+                        os.startfile(folder_path)
+                        st.success("🎉 Folder opened! Meow-nificent! 🐱✨")
+                    except:
+                        st.error(f"Oops! {CAT_EMOJIS['error']} Couldn't open folder")
+            
+            # Compact path copy
+            with st.expander("📋 Copy Path Instead", expanded=False):
+                st.code(folder_path, language=None)
+        
+        # Cat mood indicator based on app usage
         st.markdown("---")
-        st.markdown(f"### {CAT_EMOJIS['excited']} Test Zone")
-        if st.button("🎉 Test Cat Animation!", help="See the floating cats without downloading"):
-            st.success("Activating cat celebration! 🐱✨")
+        download_count = st.session_state.get('download_count', 0)
+        if download_count == 0:
+            mood_cat = CAT_EMOJIS['normal']
+            mood_text = "Ready to download!"
+        elif download_count < 5:
+            mood_cat = CAT_EMOJIS['happy']
+            mood_text = "Getting started!"
+        elif download_count < 10:
+            mood_cat = CAT_EMOJIS['excited']
+            mood_text = "You're on fire!"
+        else:
+            mood_cat = CAT_EMOJIS['heart_eyes']
+            mood_text = "Download master!"
+            
+        st.markdown(f"""
+        <div style="text-align: center; padding: 1rem; background: linear-gradient(135deg, rgba(255,255,255,0.7) 0%, rgba(240,230,255,0.5) 100%); border-radius: 12px; margin: 1rem 0; border: 1px solid rgba(102, 126, 234, 0.2);">
+            <div style="font-size: 2.5rem; margin-bottom: 0.5rem; animation: pulse 2s infinite;">{mood_cat}</div>
+            <div style="color: #667eea; font-weight: bold; font-size: 1rem;">{mood_text}</div>
+            <div style="color: #8b7ba8; font-size: 0.8rem; margin-top: 0.2rem;">Folder opens: {download_count}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Quick cat celebration button
+        if st.button("🎉 **Cat Party Time!** 🎉", help="Instant cat celebration!", use_container_width=True):
+            st.balloons()
+            st.success("🐱✨ MEOW PARTY ACTIVATED! ✨🐱")
             play_meow_sound()
             show_floating_cats()
-            
-        # Test folder opening
-        if st.button("📁 Test Folder Opening", help="Test if folder opening works"):
-            test_folder = get_default_download_folder()
-            st.info(f"Testing folder: {test_folder}")
-            
-            success = False
-            
-            try:
-                if platform.system() == "Windows":
-                    # Use the proven cmd /c start method
-                    try:
-                        result = subprocess.run(
-                            ["cmd", "/c", "start", test_folder], 
-                            check=True, 
-                            capture_output=True, 
-                            timeout=5
-                        )
-                        st.success("Folder opened successfully! 😸")
-                        success = True
-                    except subprocess.TimeoutExpired:
-                        st.success("Folder likely opened (timed out)")
-                        success = True
-                    except:
-                        # Backup method
-                        try:
-                            os.startfile(test_folder)
-                            st.success("Folder opened with backup method! 😸")
-                            success = True
-                        except Exception as e:
-                            st.error(f"Failed to open folder: {e}")
-                else:
-                    st.info("This test is optimized for Windows")
-                    
-                if not success and platform.system() == "Windows":
-                    st.error("All folder opening methods failed")
-                    
-            except Exception as e:
-                st.error(f"Unexpected error: {e}")
+            # Add some confetti effect
+            st.markdown(f"""
+            <div style="text-align: center; font-size: 2rem; animation: bounce 1s infinite;">
+                🎊 {CAT_EMOJIS['excited']} 🎊 {CAT_EMOJIS['heart_eyes']} 🎊 {CAT_EMOJIS['happy']} 🎊
+            </div>
+            """, unsafe_allow_html=True)
         
+        # Cute about section
         st.markdown("---")
+        with st.expander(f"ℹ️ About MeowDown {CAT_EMOJIS['paw']}"):
+            st.markdown(f"""
+            {CAT_EMOJIS['heart_eyes']} **The cutest video downloader ever!**
+            
+            **What this kitty can do:**
+            - 📱 YouTube, TikTok, Instagram & more
+            - 🌍 1000+ supported sites  
+            - 🎥 High-quality video downloads
+            - 🎵 MP3 audio extraction
+            - 🐱 100% cat-approved interface!
+            
+            Made with {CAT_EMOJIS['heart_eyes']} and lots of purrs!
+            """)
         
-        st.markdown(f"### {CAT_EMOJIS['paw']} About This Cutie")
-        st.markdown("""
-        💕 A purr-fectly adorable video downloader that supports:
-        - 📱 YouTube, TikTok, Instagram
-        - 🌍 1000+ other sites  
-        - 🎥 MP4 video downloads
-        - 🎵 MP3 audio extraction
-        - 🤖 Automatic dependency management
-        - 🐱 100% cat-approved cuteness!
-        """)
+        # Cute footer with animation
+        st.markdown(f"""
+        <div style="text-align: center; padding: 1rem; margin-top: 2rem;">
+            <div style="font-size: 1.5rem; margin-bottom: 0.3rem; animation: wiggle 3s infinite;">🐾 🐱 🐾</div>
+            <div style="color: #8b7ba8; font-size: 0.7rem; font-style: italic;">Made with purrs & pixels</div>
+        </div>
         
-        st.markdown("---")
-        
-        if st.button(f"{CAT_EMOJIS['heart_eyes']} Give Us Some Love!"):
-            st.markdown(f"[⭐ Star on GitHub]({GITHUB_URL})")
-            st.markdown("💕 Thank you for supporting our purr-oject!")
-        
-        st.markdown("---")
-        
-        st.markdown(f"### {CAT_EMOJIS['cool']} Paw-some System Info")
-        deps = check_dependencies()
-        
-        st.write(f"😸 **yt-dlp:** {'✅ Ready to pounce!' if deps['ytdlp'] else '❌ Needs setup'}")
-        st.write(f"🎬 **FFmpeg:** {'✅ Purr-fect!' if deps['ffmpeg'] else '❌ Downloading...'}")
-        st.write(f"💻 **Platform:** {platform.system()} *meow*")
-        
-        if st.button("🔄 Refresh Paw-some Status"):
-            st.session_state.deps_checked = False
-            st.rerun()
+        <style>
+        @keyframes bounce {{
+            0%, 20%, 50%, 80%, 100% {{ transform: translateY(0); }}
+            40% {{ transform: translateY(-10px); }}
+            60% {{ transform: translateY(-5px); }}
+        }}
+        @keyframes pulse {{
+            0% {{ transform: scale(1); }}
+            50% {{ transform: scale(1.1); }}
+            100% {{ transform: scale(1); }}
+        }}
+        @keyframes wiggle {{
+            0%, 100% {{ transform: rotate(0deg); }}
+            25% {{ transform: rotate(5deg); }}
+            75% {{ transform: rotate(-5deg); }}
+        }}
+        </style>
+        """, unsafe_allow_html=True)
         
         st.markdown("🐾 *paws and whiskers ready for action!*")
         

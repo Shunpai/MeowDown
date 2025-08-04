@@ -21,15 +21,24 @@ MAIN_SCRIPT = "app.py"
 
 def print_cat(message):
     """Print with cute cat emoji."""
-    print(f"🐱 {message}")
+    try:
+        print(f"🐱 {message}")
+    except UnicodeEncodeError:
+        print(f"[CAT] {message}")
 
 def print_error(message):
     """Print error with sad cat."""
-    print(f"😿 ERROR: {message}")
+    try:
+        print(f"😿 ERROR: {message}")
+    except UnicodeEncodeError:
+        print(f"[ERROR] {message}")
 
 def print_success(message):
     """Print success with happy cat."""
-    print(f"😸 SUCCESS: {message}")
+    try:
+        print(f"😸 SUCCESS: {message}")
+    except UnicodeEncodeError:
+        print(f"[SUCCESS] {message}")
 
 def run_command(cmd, check=True):
     """Run a command and return the result."""
@@ -147,43 +156,118 @@ Launches the Streamlit app with proper configuration.
 import subprocess
 import sys
 import os
+import multiprocessing
+import time
+import webbrowser
 from pathlib import Path
 
 def main():
     """Launch the Streamlit app."""
-    # Get the directory where this script is located
-    app_dir = Path(__file__).parent
+    print("Starting MeowDown...")
+    
+    # Prevent multiple instances using process detection
+    import tempfile
+    
+    # Check for running streamlit processes
+    try:
+        result = subprocess.run(["tasklist", "/FI", "IMAGENAME eq python.exe"], 
+                              capture_output=True, text=True)
+        if "streamlit" in result.stdout.lower():
+            print("MeowDown may already be running!")
+            print("Check your browser for http://localhost:8501")
+            print("If not working, close any Python/Streamlit processes first.")
+            input("Press Enter to exit...")
+            return
+    except:
+        pass  # Continue if process check fails
+    
+    # Create simple lock file as backup
+    lock_file = Path(tempfile.gettempdir()) / "meowdown.lock" 
+    try:
+        # Clean up any old lock files first
+        if lock_file.exists():
+            lock_file.unlink()
+        lock_file.write_text("running")
+    except:
+        pass  # Continue even if lock file fails
+    
+    # Get the directory where this script is located  
+    if getattr(sys, 'frozen', False):
+        # Running as PyInstaller bundle
+        app_dir = Path(sys._MEIPASS)
+        print(f"Running from PyInstaller bundle: {{app_dir}}")
+    else:
+        # Running as script
+        app_dir = Path(__file__).parent
+        print(f"Running from script directory: {{app_dir}}")
+    
     app_script = app_dir / "app.py"
     
     if not app_script.exists():
-        print("😿 Error: app.py not found!")
+        print("Error: app.py not found!")
+        print(f"Looking in: {{app_dir}}")
+        try:
+            print(f"Available files: {{list(app_dir.glob('*'))}}")
+        except:
+            print("Could not list directory contents")
         input("Press Enter to exit...")
         return
     
-    # Launch Streamlit
+    print(f"Found app.py at: {{app_script}}")
+    
+    # Launch Streamlit with EXACT SAME parameters as working batch file
     cmd = [
-        sys.executable, "-m", "streamlit", "run", str(app_script),
-        "--server.port", "8501",
-        "--server.address", "localhost",
-        "--browser.serverAddress", "localhost",
+        "streamlit", "run", str(app_script),
+        "--server.port", "8501", 
         "--browser.gatherUsageStats", "false",
         "--theme.base", "light",
-        "--theme.primaryColor", "#667eea",
-        "--theme.backgroundColor", "#ffffff",
-        "--theme.secondaryBackgroundColor", "#f0f2f6"
+        "--theme.primaryColor", "#667eea"
     ]
     
+    print(f"Command: {{' '.join(cmd)}}")
+    
     try:
-        print("🐱 Starting MeowDown...")
-        print("🌐 Opening in your browser...")
-        subprocess.run(cmd)
-    except KeyboardInterrupt:
-        print("\\n🐱 MeowDown stopped. Goodbye!")
-    except Exception as e:
-        print(f"😿 Error starting MeowDown: {{e}}")
+        print("Launching Streamlit server...")
+        print("This will open in your browser at http://localhost:8501")
+        print("Only ONE tab will open!")
+        
+        # Start Streamlit normally (let it handle browser opening)
+        process = subprocess.Popen(
+            cmd,
+            text=True,
+            creationflags=0 if sys.platform != "win32" else 0
+        )
+        
+        print("MeowDown is running!")
+        print("Close this window to stop the server.")
+        print("Press Ctrl+C to stop...")
+        
+        # Wait for the process to complete or be interrupted
+        try:
+            process.wait()
+        except KeyboardInterrupt:
+            print("Stopping MeowDown...")
+            process.terminate()
+            process.wait()
+            
+    except FileNotFoundError:
+        print("Error: Streamlit not found!")
+        print("Make sure Streamlit is installed: pip install streamlit")
         input("Press Enter to exit...")
+    except Exception as e:
+        print(f"Error starting MeowDown: {{e}}")
+        input("Press Enter to exit...")
+        
+    # Clean up lock file
+    try:
+        if 'lock_file' in locals() and lock_file.exists():
+            lock_file.unlink()
+    except:
+        pass
 
 if __name__ == "__main__":
+    # Critical fix for PyInstaller multiprocessing issues
+    multiprocessing.freeze_support()
     main()
 '''
     
@@ -203,6 +287,7 @@ block_cipher = None
 # Streamlit and other data files
 added_files = [
     ('bin', 'bin'),  # Include FFmpeg binary
+    ('app.py', '.'),  # Include main app script
 ]
 
 # Get streamlit path
@@ -238,6 +323,9 @@ a = Analysis(
         'PIL',
         'toml',
         'validators',
+        'multiprocessing',
+        'multiprocessing.pool',
+        'multiprocessing.spawn',
         'watchdog',
         'tornado',
         'packaging',
@@ -412,7 +500,7 @@ Made with ❤️ and lots of purrs 🐾
 
 def main():
     """Main build process."""
-    print_cat(f"Building {APP_NAME} v{VERSION} - Streamlit Edition 🐾")
+    print_cat(f"Building {APP_NAME} v{VERSION} - Streamlit Edition")
     print_cat(f"Platform: {platform.system()} {platform.machine()}")
     print_cat("=" * 60)
     

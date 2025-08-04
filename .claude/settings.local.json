@@ -8,7 +8,13 @@
       "Bash(copy README.md README_OLD.md)",
       "Bash(copy README_NEW.md README.md)",
       "Bash(taskkill:*)",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(del app_debug.py)",
+      "Bash(rm:*)",
+      "Bash(ls:*)",
+      "Bash(\"MeowDown_Simple_Working.bat\")",
+      "Bash(cmd /c:*)",
+      "Bash(del test_folder_opener.py)"
     ],
     "deny": []
   }
